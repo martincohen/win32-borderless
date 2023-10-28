@@ -4,7 +4,7 @@ call env-vc64.bat
 if not exist build mkdir build
 
 pushd build
-cl -Od -Z7 -FC ..\main.c
+cl -Od -Z7 -FC ..\test-bed.c
 popd
 
 if %ERRORLEVEL% geq 1 (

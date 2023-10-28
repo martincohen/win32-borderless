@@ -10,6 +10,28 @@
 
 #define WINDOW_CLASS_NAME "edc6a340-968a-4ccf-8af3-de0a71c427fd"
 
+// TODO: Variants of Minimize/Maximize/Close and windows drag interactions:
+//
+// Maximize
+// 1) PostMessage(hwnd, WM_SYSCOMMAND, SC_MAXIMIZE, 0)
+// 2) ShowWindow(Handle, SW_MAXIMIZE)
+//
+// Restore
+// 1) PostMessage(hwnd, WM_SYSCOMMAND, SC_RESTORE, 0)
+// 2) ShowWindow(Handle, SW_NORMAL)
+//
+// Minimize
+// 1) PostMessage(hwnd, WM_SYSCOMMAND, SC_MINIMIZE, 0)
+// 2) ShowWindow(Handle, SW_MINIMIZE)
+//
+// Close
+// 1) PostMessage(hwnd, WM_SYSCOMMAND, SC_CLOSE, 0)
+// 2) PostMessage(hwnd, WM_CLOSE, 0, 0)
+//
+// Drag
+// PostMessage(hwnd, WM_NCLBUTTONDOWN, HTCAPTION, 0)
+// NOTE: This starts it's own modal loop while the drag is active.
+
 typedef struct Button
 {
     RECT bounds;
@@ -99,7 +121,7 @@ typedef struct WindowSettings
 }
 WindowSettings;
 
-#define INTERCEPTOR(name) BOOL(name)(WindowSettings * settings, HWND handle, UINT message, WPARAM wp, LPARAM lp, LRESULT * res)
+#define INTERCEPTOR(name) BOOL(name)(WindowSettings * settings, HWND hwnd, UINT message, WPARAM wp, LPARAM lp, LRESULT * res)
 
 INTERCEPTOR(dwm)
 {
@@ -108,7 +130,7 @@ INTERCEPTOR(dwm)
 
     if (message == WM_CREATE)
     {
-        dwm(settings, handle, WM_DWMCOMPOSITIONCHANGED, wp, lp, res);
+        dwm(settings, hwnd, WM_DWMCOMPOSITIONCHANGED, wp, lp, res);
         return FALSE;
     }
 
@@ -134,9 +156,10 @@ INTERCEPTOR(dwm)
                 margins = (MARGINS){0, 0, 0, 1};
                 break;
             }
-            DwmExtendFrameIntoClientArea(handle, &margins);
+            DwmExtendFrameIntoClientArea(hwnd, &margins);
         }
 
+        // TODO: Pass to DefWindowProc?
         *res = 0;
         return TRUE;
     }
@@ -149,10 +172,28 @@ INTERCEPTOR(nccalcsize)
     if (settings->nccalcsize_margins == NcCalcSizeMarginsOff)
         return FALSE;
 
+    if (message == WM_CREATE)
+    {
+        // This will initialize WM_NCCALCSIZE
+
+        // We might not need the rect, so I'm commenting it out.
+        // RECT rect;
+        // GetWindowRect(hwnd, &rect);
+        SetWindowPos(
+            hwnd, NULL,
+            0, // rect.left,
+            0, // rect.top,
+            0, // rect.right - rect.left,
+            0, // rect.bottom - rect.top,
+            SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE
+        );
+        return FALSE;
+    }
+
     if (message == WM_NCCALCSIZE)
     {
         RECT nc_rect = *((RECT *)lp);
-        DefWindowProc(handle, message, wp, lp);
+        DefWindowProc(hwnd, message, wp, lp);
         RECT *c_rect = (RECT *)lp;
 
         switch (settings->nccalcsize_margins)
@@ -208,7 +249,7 @@ INTERCEPTOR(nccalcsize)
 
 static LRESULT
 window_proc(
-    HWND handle,
+    HWND hwnd,
     UINT message,
     WPARAM wp,
     LPARAM lp)
@@ -218,31 +259,19 @@ window_proc(
     {
         CREATESTRUCTA *create_struct = (CREATESTRUCTA *)lp;
         settings = (WindowSettings *)create_struct->lpCreateParams;
-        SetPropA(handle, WINDOW_CLASS_NAME "/settings", settings);
-
-        // This will initialize WM_NCCALCSIZE
-        RECT rect;
-        GetWindowRect(handle, &rect);
-        SetWindowPos(
-            handle, NULL,
-            rect.left,
-            rect.top,
-            rect.right - rect.left,
-            rect.bottom - rect.top,
-            SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE
-        );
+        SetPropA(hwnd, WINDOW_CLASS_NAME "/settings", settings);
     }
     else
     {
-        settings = GetPropA(handle, WINDOW_CLASS_NAME "/settings");
+        settings = GetPropA(hwnd, WINDOW_CLASS_NAME "/settings");
     }
 
     if (settings)
     {
         LRESULT res = 0;
-        if (dwm(settings, handle, message, wp, lp, &res))
+        if (dwm(settings, hwnd, message, wp, lp, &res))
             return res;
-        if (nccalcsize(settings, handle, message, wp, lp, &res))
+        if (nccalcsize(settings, hwnd, message, wp, lp, &res))
             return res;
     }
 
@@ -260,9 +289,9 @@ window_proc(
     case WM_PAINT:
     {
         PAINTSTRUCT ps;
-        HDC hdc = BeginPaint(handle, &ps);
+        HDC hdc = BeginPaint(hwnd, &ps);
 
-        HBRUSH brush_bg = CreateSolidBrush(RGB(0xF0, 0xF0, 0xF0));
+        HBRUSH brush_bg = CreateSolidBrush(RGB(0xA0, 0xA0, 0xA0));
         FillRect(hdc, &ps.rcPaint, brush_bg);
         DeleteObject(brush_bg);
 
@@ -291,7 +320,7 @@ window_proc(
                 strlen(nccalcsize_margins_enum[settings->nccalcsize_margins]));
         }
 
-        EndPaint(handle, &ps);
+        EndPaint(hwnd, &ps);
 
         return 0;
     }
@@ -300,10 +329,10 @@ window_proc(
     case WM_NCHITTEST:
     {
         POINT pt = {LOWORD(lp), HIWORD(lp)};
-        ScreenToClient(handle, &pt);
+        ScreenToClient(hwnd, &pt);
 
         RECT rect;
-        GetClientRect(handle, &rect);
+        GetClientRect(hwnd, &rect);
 
         if (PtInRect(&rect, pt))
         {
@@ -333,7 +362,7 @@ window_proc(
             return HTCLIENT;
         }
         else
-            return HTCAPTION;
+            return HTNOWHERE;
     }
 
     case WM_NCMOUSEMOVE:
@@ -351,14 +380,14 @@ window_proc(
             }
         }
         if (button_hovered_prev != button_hovered)
-            InvalidateRect(handle, NULL, FALSE);
+            InvalidateRect(hwnd, NULL, FALSE);
 
         if (!is_tracking)
         {
             TRACKMOUSEEVENT tme = {
                 .cbSize = sizeof(TRACKMOUSEEVENT),
                 .dwFlags = TME_LEAVE | TME_NONCLIENT,
-                .hwndTrack = handle,
+                .hwndTrack = hwnd,
                 .dwHoverTime = HOVER_DEFAULT,
             };
             is_tracking = TrackMouseEvent(&tme);
@@ -371,9 +400,68 @@ window_proc(
     {
         is_tracking = 0;
         button_hovered = -1;
-        InvalidateRect(handle, NULL, FALSE);
+        InvalidateRect(hwnd, NULL, FALSE);
         return 0;
     }
+
+    // WM_NCLBUTTONDOWN draws original Windows 95/7 buttons when the button is clicked.
+    // Solution here is to block it here.
+    // However, this might not be ideal solution for everything.
+    // Still would be better if we had this message handled by Windows.
+    // Requires investigation and I consider this to be a "hack".
+    case WM_NCLBUTTONDOWN:
+        switch (wp)
+        {
+            case HTMAXBUTTON:
+            case HTMINBUTTON:
+            case HTCLOSE:
+                return 0;
+        }
+        break;
+
+    // COMMENTED: Results in Window 7 chrome glitches (in both cases return 0 or return 1)
+    // Saw somewhere mentioned that we should only block it if the composition is enabled, however it was enabled and resulted in the glitches anyway.
+    // case WM_NCPAINT:
+    // {
+    //     return 1;
+    //     return 0;
+    // }
+    // break;
+
+
+    // TODO: The documentation says that this receives hit-test from DefWindowProc in wp, and not the hit-test from calling our WindowProc.
+    // But maybe we can force it?
+    // case WM_NCLBUTTONDOWN:
+    // {
+    //     LRESULT r = DefWindowProcA(hwnd, WM_NCLBUTTONDOWN, wp, lp);
+    //     return r;
+    // }
+
+
+    // COMMENTED: This might be needed for pre-Windows-10 or dwm-composition-disabled scenarios. Didn't find any kind of effect
+    // in default Windows 10 with dwm composition enabled.
+    //
+    // case WM_NCPAINT:
+        // If this is blocked when composition is enabled, it won't draw the shadow.
+        // Be sure that s_dwm_composition_enabled is initialized soon enough.
+        // If you don't pass the WS_VISIBLE flag to the window, then WM_NCPAINT will be called whenever you later call ShowWindow.
+        // if (!s_dwm_composition_enabled)
+        //     return 1;
+        // break;
+
+    // These undocumented messages are sent to draw themed window borders.
+    // Block them to prevent drawing borders over the client area.
+    // COMMENTED: Didn't have much luck getting these called on Windows 10. Commenting it out to see whether it'll help in some edge case later.    
+    // case UNDOCUMENTED_WM_NCUAHDRAWCAPTION:
+    //     OutputDebugStringA("UNDOCUMENTED_WM_NCUAHDRAWCAPTION\n");
+    //     return 0;
+    // case UNDOCUMENTED_WM_NCUAHDRAWFRAME:
+    //     OutputDebugStringA("UNDOCUMENTED_WM_NCUAHDRAWFRAME\n");
+    //     return 0;
+
+    // Note: for some pre-Windows-10 versions or maybe dwm-composition-disabled scenarios, you might want to also block WM_NCACTIVATE
+    // See https://github.com/ControlzEx/ControlzEx/blob/8ea2b94753b39b07310edc847fb825929bf25b81/src/ControlzEx/Behaviors/WindowChrome/WindowChromeBehavior.MessageHandling.cs#L237
+
 
     case WM_SETCURSOR:
     {
@@ -392,7 +480,7 @@ window_proc(
 
     }
 
-    return DefWindowProcA(handle, message, wp, lp);
+    return DefWindowProcA(hwnd, message, wp, lp);
 }
 
 void
@@ -426,7 +514,7 @@ create_window(WindowSettings settings)
     CreateWindowExA(
         WS_EX_APPWINDOW,
         WINDOW_CLASS_NAME,
-        "Win32 Borderless",
+        "Win32 Borderless Test Bed",
         WS_THICKFRAME | WS_SYSMENU | WS_MAXIMIZEBOX | WS_MINIMIZEBOX | WS_VISIBLE,
         x, y, w, h,
         0,

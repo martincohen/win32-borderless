@@ -2,8 +2,23 @@
     "tasks": [
         {
             "type": "process",
-            "label": "build",
-            "command": "${workspaceRoot}\\build.bat",
+            "label": "build-test-bed",
+            "command": "${workspaceRoot}\\build-test-bed.bat",
+            "options": {
+                "cwd": "${workspaceRoot}"
+            },
+            "problemMatcher": [
+                "$msCompile"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        },
+        {
+            "type": "process",
+            "label": "build-solution",
+            "command": "${workspaceRoot}\\build-solution.bat",
             "options": {
                 "cwd": "${workspaceRoot}"
             },
