@@ -8,13 +8,16 @@
 #pragma comment(lib, "gdi32.lib")
 #pragma comment(lib, "Dwmapi.lib")
 
+// see https://source.chromium.org/chromium/chromium/src/+/main:ui/views/win/hwnd_message_handler.h;l=72?q=WM_NCUAHDRAWCAPTION%20&ss=chromium%2Fchromium%2Fsrc:ui%2Fviews%2F
 #define UNDOCUMENTED_WM_NCUAHDRAWCAPTION 0x00AE
 #define UNDOCUMENTED_WM_NCUAHDRAWFRAME 0x00AF
 
+// TODO: Look into https://source.chromium.org/chromium/chromium/src/+/main:ui/views/win/hwnd_message_handler.cc;l=2329;bpv=0;bpt=1
+
 #define WINDOW_CLASS_NAME "edc6a340-968a-4ccf-8af3-de0a71c427fd"
 
-// #define WINDOW_BG RGB(0xA0, 0xA0, 0xA0)
-#define WINDOW_BG RGB(0xF0, 0xF0, 0xF0)
+#define WINDOW_BG_1 RGB(0xA0, 0xA0, 0xA0)
+#define WINDOW_BG_2 RGB(0xF0, 0xF0, 0xF0)
 
 // TODO: Variants of Minimize/Maximize/Close and windows drag interactions:
 //
@@ -179,6 +182,37 @@ INTERCEPTOR(dwm)
                 break;
             }
             DwmExtendFrameIntoClientArea(hwnd, &margins);
+
+            // Not very sure this has any positive effect.
+            // https://learn.microsoft.com/en-us/windows/win32/api/dwmapi/ne-dwmapi-dwmncrenderingpolicy
+            // int attr = DWMNCRP_DISABLED;
+            // int attr = DWMNCRP_ENABLED;
+            // DwmSetWindowAttribute(
+            //     hwnd,
+            //     DWMWA_NCRENDERING_POLICY,
+            //     &attr,
+            //     sizeof(int));
+
+            // Windows 11 (build 22000) stuff:
+            // - DWMWA_VISIBLE_FRAME_BORDER_THICKNESS
+            // - DWM_WINDOW_CORNER_PREFERENCE
+            // COLORREF attr = RGB(255, 0, 0);
+            // DwmSetWindowAttribute(
+            //     hwnd,
+            //     DWMWA_BORDER_COLOR,
+            //     &attr,
+            //     sizeof(COLORREF)
+            // );
+
+            // This does have some effect on the extra borders, they are now drawn in white.
+            // We can perhaps find out how to correctly cover the border with some reasonable color.
+            // BOOL attr = TRUE;
+            // DwmSetWindowAttribute(
+            //     hwnd,
+            //     DWMWA_ALLOW_NCPAINT,
+            //     &attr,
+            //     sizeof(BOOL)
+            // );
         }
 
         // TODO: Pass to DefWindowProc?
@@ -233,7 +267,7 @@ INTERCEPTOR(nccalcsize)
 
         case NcCalcSizeMarginsBottomOutset:
             *c_rect = nc_rect;
-            c_rect->bottom += 1;
+            c_rect->bottom++;
             break;
 
         case NcCalcSizeMarginsLeftOutset:
@@ -258,14 +292,14 @@ INTERCEPTOR(nccalcsize)
             break;
         }
 
-        if (wp == 0)
-        {
-            // ControlzEx: Using the combination of WVR.VALIDRECTS and WVR.REDRAW gives the smoothest
-            // resize behavior we can achieve here.
-            //
-            // This might be true for WM_PAINT-based drawing, but we'll see.
-            return WVR_VALIDRECTS | WVR_HREDRAW | WVR_VREDRAW;
-        }
+        // COMMENTED: We don't know what ControlzEx is actually solving, so we'll have to see.
+        // if (wp == 0)
+        // {
+        //     // ControlzEx: Using the combination of WVR.VALIDRECTS and WVR.REDRAW gives the smoothest
+        //     // resize behavior we can achieve here.
+        //     // This might be true for WM_PAINT-based drawing, but we'll see.
+        //     // *res = WVR_VALIDRECTS | WVR_REDRAW;
+        // }
 
         *res = 0;
         return TRUE;
@@ -316,14 +350,34 @@ window_proc(
     case WM_ERASEBKGND:
         return 1;
 
+    // case WM_NCPAINT:
+    // {
+    //     PAINTSTRUCT ps;
+    //     HDC hdc = BeginPaint(hwnd, &ps);
+    //     HBRUSH brush_bg = CreateSolidBrush(WINDOW_BG);
+    //     FillRect(hdc, &ps.rcPaint, brush_bg);
+    //     DeleteObject(brush_bg);
+    //     EndPaint(hwnd, &ps);
+
+    //     return 0;
+    // }
+    // break;
+
     case WM_PAINT:
     {
         PAINTSTRUCT ps;
         HDC hdc = BeginPaint(hwnd, &ps);
-
-        HBRUSH brush_bg = CreateSolidBrush(WINDOW_BG);
-        FillRect(hdc, &ps.rcPaint, brush_bg);
-        DeleteObject(brush_bg);
+        RECT r = ps.rcPaint;
+        int hw = (r.right - r.left) / 2;
+        int hh = (r.bottom - r.top) / 2;
+        HBRUSH brush_bg_1 = CreateSolidBrush(WINDOW_BG_1);
+        HBRUSH brush_bg_2 = CreateSolidBrush(WINDOW_BG_2);
+        FillRect(hdc, &(RECT){ r.left, r.top, r.left + hw, r.top + hh }, brush_bg_1);
+        FillRect(hdc, &(RECT){ r.left + hw, r.top, r.right, r.top + hh }, brush_bg_2);
+        FillRect(hdc, &(RECT){ r.left, r.top + hh, r.left + hw, r.bottom }, brush_bg_2);
+        FillRect(hdc, &(RECT){ r.left + hw, r.top + hh, r.right, r.bottom }, brush_bg_1);
+        DeleteObject(brush_bg_2);
+        DeleteObject(brush_bg_1);
 
         HBRUSH brush_hover = CreateSolidBrush(RGB(0, 255, 255));
         for (int i = 0; i < 3; ++i)
@@ -397,8 +451,6 @@ window_proc(
 
     case WM_NCMOUSEMOVE:
     {
-        printf("WM_NCMOUSEMOVE\n");
-
         int button_hovered_prev = button_hovered;
         button_hovered = -1;
         for (int i = 0; i < 3; ++i)
@@ -478,23 +530,23 @@ window_proc(
     // COMMENTED: This might be needed for pre-Windows-10 or dwm-composition-disabled scenarios. Didn't find any kind of effect
     // in default Windows 10 with dwm composition enabled.
     //
-    case WM_NCPAINT:
-        // If this is blocked when composition is enabled, it won't draw the shadow.
-        // Be sure that s_dwm_composition_enabled is initialized soon enough.
-        // If you don't pass the WS_VISIBLE flag to the window, then WM_NCPAINT will be called whenever you later call ShowWindow.
-        if (!s_dwm_composition_enabled)
-            return 1;
-        break;
+    // case WM_NCPAINT:
+    //     // If this is blocked when composition is enabled, it won't draw the shadow.
+    //     // Be sure that s_dwm_composition_enabled is initialized soon enough.
+    //     // If you don't pass the WS_VISIBLE flag to the window, then WM_NCPAINT will be called whenever you later call ShowWindow.
+    //     if (!s_dwm_composition_enabled)
+    //         return 1;
+    //     break;
 
     // These undocumented messages are sent to draw themed window borders.
     // Block them to prevent drawing borders over the client area.
     // COMMENTED: Didn't have much luck getting these called on Windows 10. Commenting it out to see whether it'll help in some edge case later.    
-    case UNDOCUMENTED_WM_NCUAHDRAWCAPTION:
-        OutputDebugStringA("UNDOCUMENTED_WM_NCUAHDRAWCAPTION\n");
-        return 0;
-    case UNDOCUMENTED_WM_NCUAHDRAWFRAME:
-        OutputDebugStringA("UNDOCUMENTED_WM_NCUAHDRAWFRAME\n");
-        return 0;
+    // case UNDOCUMENTED_WM_NCUAHDRAWCAPTION:
+    //     OutputDebugStringA("UNDOCUMENTED_WM_NCUAHDRAWCAPTION\n");
+    //     return 0;
+    // case UNDOCUMENTED_WM_NCUAHDRAWFRAME:
+    //     OutputDebugStringA("UNDOCUMENTED_WM_NCUAHDRAWFRAME\n");
+    //     return 0;
 
     // Note: for some pre-Windows-10 versions or maybe dwm-composition-disabled scenarios, you might want to also block WM_NCACTIVATE
     // See https://github.com/ControlzEx/ControlzEx/blob/8ea2b94753b39b07310edc847fb825929bf25b81/src/ControlzEx/Behaviors/WindowChrome/WindowChromeBehavior.MessageHandling.cs#L237
