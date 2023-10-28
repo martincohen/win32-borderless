@@ -66,6 +66,7 @@ int window_count = 0;
 #define DWM_WINDOW_MARGINS_ENUM \
     X(DwmMarginsOff) \
     X(DwmMarginsNeg) \
+    X(DwmMarginsOne) \
     X(DwmMarginsZero) \
     X(DwmMarginsTop) \
     X(DwmMarginsBottom)
@@ -78,6 +79,13 @@ int window_count = 0;
     X(NcCalcSizeMarginsBottomOutset) \
     X(NcCalcSizeMarginsInset) \
     X(NcCalcSizeMarginsOutset)
+
+// Candidates:
+// Windows 11
+// DwmMarginsOff + NcCalcSizeMarginsInset
+// DwmMarginsOff + NcCalcSizeMarginsBottomInset
+// DwmMarginsOne + NcCalcSizeMarginsInset
+// DwmMarginsBottom + NcCalcSizeMarginsBottomOutset
 
 typedef enum DwmMarginsEnum
 {
@@ -112,7 +120,7 @@ char* nccalcsize_margins_enum[] = {
 
 RECT grid_area = {0};
 int grid_columns = NcCalcSizeMargins_MAX;
-int grid_rows = 5;
+int grid_rows = DwmMargins_MAX;
 
 typedef struct WindowSettings
 {
@@ -145,6 +153,9 @@ INTERCEPTOR(dwm)
             {
             case DwmMarginsNeg:
                 margins = (MARGINS){-1};
+                break;
+            case DwmMarginsOne:
+                margins = (MARGINS){0};
                 break;
             case DwmMarginsZero:
                 margins = (MARGINS){0};
@@ -545,7 +556,6 @@ int WinMain(
     for (int i0 = 0; i0 < DwmMargins_MAX; ++i0)
     for (int i1 = 0; i1 < NcCalcSizeMargins_MAX; ++i1)
     {
-        // if (i0 == DwmMarginsNeg) continue;
         create_window((WindowSettings){
             .dwm_margins = i0,
             .nccalcsize_margins = i1
