@@ -8,7 +8,13 @@
 #pragma comment(lib, "gdi32.lib")
 #pragma comment(lib, "Dwmapi.lib")
 
+#define UNDOCUMENTED_WM_NCUAHDRAWCAPTION 0x00AE
+#define UNDOCUMENTED_WM_NCUAHDRAWFRAME 0x00AF
+
 #define WINDOW_CLASS_NAME "edc6a340-968a-4ccf-8af3-de0a71c427fd"
+
+// #define WINDOW_BG RGB(0xA0, 0xA0, 0xA0)
+#define WINDOW_BG RGB(0xF0, 0xF0, 0xF0)
 
 // TODO: Variants of Minimize/Maximize/Close and windows drag interactions:
 //
@@ -62,6 +68,7 @@ int button_hovered = -1;
 int is_tracking = 0;
 int idle_message = 0;
 int window_count = 0;
+int s_dwm_composition_enabled = 0;
 
 #define DWM_WINDOW_MARGINS_ENUM \
     X(DwmMarginsOff) \
@@ -77,6 +84,7 @@ int window_count = 0;
     X(NcCalcSizeMarginsCaptionOff) \
     X(NcCalcSizeMarginsBottomInset) \
     X(NcCalcSizeMarginsBottomOutset) \
+    X(NcCalcSizeMarginsLeftOutset) \
     X(NcCalcSizeMarginsInset) \
     X(NcCalcSizeMarginsOutset)
 
@@ -133,20 +141,23 @@ WindowSettings;
 
 INTERCEPTOR(dwm)
 {
-    if (settings->dwm_margins == DwmMarginsOff)
-        return FALSE;
-
     if (message == WM_CREATE)
     {
+        s_dwm_composition_enabled = FALSE;
+        DwmIsCompositionEnabled(&s_dwm_composition_enabled);
         dwm(settings, hwnd, WM_DWMCOMPOSITIONCHANGED, wp, lp, res);
         return FALSE;
     }
 
+    if (settings->dwm_margins == DwmMarginsOff)
+        return FALSE;
+
     if (message == WM_DWMCOMPOSITIONCHANGED)
     {
-        BOOL enabled = FALSE;
-        DwmIsCompositionEnabled(&enabled);
-        if (enabled)
+        s_dwm_composition_enabled = FALSE;
+        DwmIsCompositionEnabled(&s_dwm_composition_enabled);
+
+        if (s_dwm_composition_enabled)
         {
             MARGINS margins = {0};
             switch (settings->dwm_margins)
@@ -155,7 +166,7 @@ INTERCEPTOR(dwm)
                 margins = (MARGINS){-1};
                 break;
             case DwmMarginsOne:
-                margins = (MARGINS){0};
+                margins = (MARGINS){1};
                 break;
             case DwmMarginsZero:
                 margins = (MARGINS){0};
@@ -222,7 +233,12 @@ INTERCEPTOR(nccalcsize)
 
         case NcCalcSizeMarginsBottomOutset:
             *c_rect = nc_rect;
-            c_rect->bottom++;
+            c_rect->bottom += 1;
+            break;
+
+        case NcCalcSizeMarginsLeftOutset:
+            *c_rect = nc_rect;
+            c_rect->left--;
             break;
 
         case NcCalcSizeMarginsInset:
@@ -297,12 +313,15 @@ window_proc(
     }
     break;
 
+    case WM_ERASEBKGND:
+        return 1;
+
     case WM_PAINT:
     {
         PAINTSTRUCT ps;
         HDC hdc = BeginPaint(hwnd, &ps);
 
-        HBRUSH brush_bg = CreateSolidBrush(RGB(0xA0, 0xA0, 0xA0));
+        HBRUSH brush_bg = CreateSolidBrush(WINDOW_BG);
         FillRect(hdc, &ps.rcPaint, brush_bg);
         DeleteObject(brush_bg);
 
@@ -430,15 +449,23 @@ window_proc(
         }
         break;
 
-    // COMMENTED: Results in Window 7 chrome glitches (in both cases return 0 or return 1)
-    // Saw somewhere mentioned that we should only block it if the composition is enabled, however it was enabled and resulted in the glitches anyway.
-    // case WM_NCPAINT:
-    // {
-    //     return 1;
-    //     return 0;
-    // }
-    // break;
-
+    // Cop-out version of handling the buttons.
+    // Normally we'd do CaptureMouse/ReleaseMouse to correctly handle this.
+    // One might implement drag on these buttons as drag of the window.
+    case WM_NCLBUTTONUP:
+        switch (wp)
+        {
+            case HTMAXBUTTON:
+                PostMessageA(hwnd, WM_SYSCOMMAND, IsZoomed(hwnd) ? SC_RESTORE : SC_MAXIMIZE, 0);
+                return 0;
+            case HTMINBUTTON:
+                PostMessageA(hwnd, WM_SYSCOMMAND, SC_MINIMIZE, 0);
+                return 0;
+            case HTCLOSE:
+                PostMessageA(hwnd, WM_SYSCOMMAND, SC_CLOSE, 0);
+                return 0;
+        }
+        break;
 
     // TODO: The documentation says that this receives hit-test from DefWindowProc in wp, and not the hit-test from calling our WindowProc.
     // But maybe we can force it?
@@ -448,27 +475,26 @@ window_proc(
     //     return r;
     // }
 
-
     // COMMENTED: This might be needed for pre-Windows-10 or dwm-composition-disabled scenarios. Didn't find any kind of effect
     // in default Windows 10 with dwm composition enabled.
     //
-    // case WM_NCPAINT:
+    case WM_NCPAINT:
         // If this is blocked when composition is enabled, it won't draw the shadow.
         // Be sure that s_dwm_composition_enabled is initialized soon enough.
         // If you don't pass the WS_VISIBLE flag to the window, then WM_NCPAINT will be called whenever you later call ShowWindow.
-        // if (!s_dwm_composition_enabled)
-        //     return 1;
-        // break;
+        if (!s_dwm_composition_enabled)
+            return 1;
+        break;
 
     // These undocumented messages are sent to draw themed window borders.
     // Block them to prevent drawing borders over the client area.
     // COMMENTED: Didn't have much luck getting these called on Windows 10. Commenting it out to see whether it'll help in some edge case later.    
-    // case UNDOCUMENTED_WM_NCUAHDRAWCAPTION:
-    //     OutputDebugStringA("UNDOCUMENTED_WM_NCUAHDRAWCAPTION\n");
-    //     return 0;
-    // case UNDOCUMENTED_WM_NCUAHDRAWFRAME:
-    //     OutputDebugStringA("UNDOCUMENTED_WM_NCUAHDRAWFRAME\n");
-    //     return 0;
+    case UNDOCUMENTED_WM_NCUAHDRAWCAPTION:
+        OutputDebugStringA("UNDOCUMENTED_WM_NCUAHDRAWCAPTION\n");
+        return 0;
+    case UNDOCUMENTED_WM_NCUAHDRAWFRAME:
+        OutputDebugStringA("UNDOCUMENTED_WM_NCUAHDRAWFRAME\n");
+        return 0;
 
     // Note: for some pre-Windows-10 versions or maybe dwm-composition-disabled scenarios, you might want to also block WM_NCACTIVATE
     // See https://github.com/ControlzEx/ControlzEx/blob/8ea2b94753b39b07310edc847fb825929bf25b81/src/ControlzEx/Behaviors/WindowChrome/WindowChromeBehavior.MessageHandling.cs#L237
