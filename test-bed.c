@@ -12,6 +12,8 @@
 #define UNDOCUMENTED_WM_NCUAHDRAWCAPTION 0x00AE
 #define UNDOCUMENTED_WM_NCUAHDRAWFRAME 0x00AF
 
+#define GetWindowStyle(hwnd) ((DWORD)GetWindowLong(hwnd, GWL_STYLE))
+
 // TODO: Look into https://source.chromium.org/chromium/chromium/src/+/main:ui/views/win/hwnd_message_handler.cc;l=2329;bpv=0;bpt=1
 
 #define WINDOW_CLASS_NAME "edc6a340-968a-4ccf-8af3-de0a71c427fd"
@@ -79,7 +81,9 @@ int s_dwm_composition_enabled = 0;
     X(DwmMarginsOne) \
     X(DwmMarginsZero) \
     X(DwmMarginsTop) \
-    X(DwmMarginsBottom)
+    X(DwmMarginsBottom) \
+    X(DwmMarginsTerminal) \
+    X(DwmMarginsTerminalBorderless)
 
 #define NCCALCSIZE_MARGINS_ENUM \
     X(NcCalcSizeMarginsOff) \
@@ -89,14 +93,8 @@ int s_dwm_composition_enabled = 0;
     X(NcCalcSizeMarginsBottomOutset) \
     X(NcCalcSizeMarginsLeftOutset) \
     X(NcCalcSizeMarginsInset) \
-    X(NcCalcSizeMarginsOutset)
-
-// Candidates:
-// Windows 11
-// DwmMarginsOff + NcCalcSizeMarginsInset
-// DwmMarginsOff + NcCalcSizeMarginsBottomInset
-// DwmMarginsOne + NcCalcSizeMarginsInset
-// DwmMarginsBottom + NcCalcSizeMarginsBottomOutset
+    X(NcCalcSizeMarginsOutset) \
+    X(NcCalcSizeMarginsTerminal)
 
 typedef enum DwmMarginsEnum
 {
@@ -129,9 +127,23 @@ char* nccalcsize_margins_enum[] = {
     #undef X
 };
 
+DwmMarginsEnum selected_dwm[] = {
+    DwmMarginsTop,
+    DwmMarginsBottom,
+    DwmMarginsTerminal,
+    DwmMarginsTerminalBorderless,
+};
+
+NcCalcSizeMarginsEnum selected_calcsize[] = {
+    NcCalcSizeMarginsLeftOutset,
+    NcCalcSizeMarginsInset,
+    NcCalcSizeMarginsOutset,
+    NcCalcSizeMarginsTerminal,
+};
+
 RECT grid_area = {0};
-int grid_columns = NcCalcSizeMargins_MAX;
-int grid_rows = DwmMargins_MAX;
+int grid_columns = ARRAYSIZE(selected_calcsize);
+int grid_rows = ARRAYSIZE(selected_dwm);
 
 typedef struct WindowSettings
 {
@@ -179,6 +191,21 @@ INTERCEPTOR(dwm)
                 break;
             case DwmMarginsBottom:
                 margins = (MARGINS){0, 0, 0, 1};
+                break;
+            case DwmMarginsTerminal:
+                RECT frame = {0};
+                UINT dpi = GetDpiForWindow(hwnd);
+                AdjustWindowRectExForDpi(&frame, GetWindowStyle(hwnd), FALSE, 0, dpi);
+                margins = (MARGINS) {
+                    .cxLeftWidth = 0,
+                    .cxRightWidth = 0,
+                    .cyTopHeight = -frame.top,
+                    .cyBottomHeight = 0,
+                };
+                break;
+            case DwmMarginsTerminalBorderless:
+                margins = (MARGINS) {0};
+                margins.cyTopHeight = 1;
                 break;
             }
             DwmExtendFrameIntoClientArea(hwnd, &margins);
@@ -249,7 +276,7 @@ INTERCEPTOR(nccalcsize)
     if (message == WM_NCCALCSIZE)
     {
         RECT nc_rect = *((RECT *)lp);
-        DefWindowProc(hwnd, message, wp, lp);
+        int def_ret = DefWindowProc(hwnd, message, wp, lp);
         RECT *c_rect = (RECT *)lp;
 
         switch (settings->nccalcsize_margins)
@@ -289,6 +316,16 @@ INTERCEPTOR(nccalcsize)
             c_rect->left--;
             c_rect->bottom++;
             c_rect->right++;
+            break;
+
+        case NcCalcSizeMarginsTerminal:
+            if (def_ret != 0)
+            {
+                *res = def_ret;
+                return TRUE;
+            }
+            // Term: Re-apply the original top from before the size of the default frame was applied.
+            c_rect->top = nc_rect.top;
             break;
         }
 
@@ -630,13 +667,13 @@ int WinMain(
     RegisterClassExA(&window_class);
 
     grid_area = (RECT){ 0, 0, 1920, 1000 };
-    int wc = DwmMargins_MAX * NcCalcSizeMargins_MAX;
-    for (int i0 = 0; i0 < DwmMargins_MAX; ++i0)
-    for (int i1 = 0; i1 < NcCalcSizeMargins_MAX; ++i1)
+    int wc = ARRAYSIZE(selected_dwm) * ARRAYSIZE(selected_calcsize);
+    for (int i0 = 0; i0 < ARRAYSIZE(selected_dwm); ++i0)
+    for (int i1 = 0; i1 < ARRAYSIZE(selected_calcsize); ++i1)
     {
         create_window((WindowSettings){
-            .dwm_margins = i0,
-            .nccalcsize_margins = i1
+            .dwm_margins = selected_dwm[i0],
+            .nccalcsize_margins = selected_calcsize[i1]
         });
     }
 
