@@ -88,7 +88,7 @@ int s_dwm_composition_enabled = 0;
 #define NCCALCSIZE_MARGINS_ENUM \
     X(NcCalcSizeMarginsOff) \
     X(NcCalcSizeMarginsBypass) \
-    X(NcCalcSizeMarginsCaptionOff) \
+    X(NcCalcSizeMarginsTopOff) \
     X(NcCalcSizeMarginsBottomInset) \
     X(NcCalcSizeMarginsBottomOutset) \
     X(NcCalcSizeMarginsLeftOutset) \
@@ -135,7 +135,9 @@ DwmMarginsEnum selected_dwm[] = {
 };
 
 NcCalcSizeMarginsEnum selected_calcsize[] = {
-    NcCalcSizeMarginsLeftOutset,
+    // Also variant used in terminal (Mica)
+    // This shouldn't be used on Windows 10, but Windows 11 should be ok.
+    NcCalcSizeMarginsTopOff, 
     NcCalcSizeMarginsInset,
     NcCalcSizeMarginsOutset,
     NcCalcSizeMarginsTerminal,
@@ -275,6 +277,12 @@ INTERCEPTOR(nccalcsize)
 
     if (message == WM_NCCALCSIZE)
     {
+        if (settings->nccalcsize_margins == NcCalcSizeMarginsTerminal && wp == 0)
+        {
+            *res = 0;
+            return TRUE;
+        }
+
         RECT nc_rect = *((RECT *)lp);
         int def_ret = DefWindowProc(hwnd, message, wp, lp);
         RECT *c_rect = (RECT *)lp;
@@ -284,7 +292,7 @@ INTERCEPTOR(nccalcsize)
         case NcCalcSizeMarginsBypass:
             *c_rect = nc_rect;
             break;
-        case NcCalcSizeMarginsCaptionOff:
+        case NcCalcSizeMarginsTopOff:
             c_rect->top = nc_rect.top;
             break;
         case NcCalcSizeMarginsBottomInset:
